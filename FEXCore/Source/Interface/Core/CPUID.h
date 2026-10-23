@@ -155,6 +155,15 @@ private:
     return (XCR0 & XCR0_AVX) ? 1 : 0;
   }
 
+  /* BCD (2026-10-23): MADEIRA_FEX_AVX=2 reports AVX but not AVX2 (nor the 256-bit VAES / VPCLMULQDQ that come with it).
+   * Marvel's Spider-Man 2 refuses to start without AVX, and with AVX2 reported its Bink 2 video decoder takes its AVX2 path
+   * and the first intro video stops on its first frame; the games that play Bink video here run with AVX off (SSE path).
+   * Instructions are not refused: a program that uses AVX2 anyway still runs it; only what CPUID answers changes. */
+  bool HideAVX2 {};
+  uint32_t SupportsAVX2() const {
+    return (SupportsAVX() && !HideAVX2) ? 1 : 0;
+  }
+
   using FunctionHandler = FEXCore::CPUID::FunctionResults (CPUIDEmu::*)(uint32_t Leaf) const;
 
   struct CPUData {
