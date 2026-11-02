@@ -121,6 +121,39 @@ static volatile uint64_t g_madeira_thr_last_rip[4] = {0,0,0,0};
 static volatile uint64_t g_cb_total = 0;
 static volatile uint64_t g_cb_real_compiles = 0;
 
+/* madeira-bcd (2026-11-02, FEX cache measurement; log only, behaviour unchanged): what a disk cache of translated
+ * code could save. [CB_COST] beside [CB_SUMMARY] gives the time spent in CompileCode() (decode + IR + JIT + publish),
+ * its largest single call, the publish-time icache flushes (JIT.cpp) and the block-link flushes. [cb-sample] lines
+ * name 1 in 128 compiled blocks by file id and offset, so two logs of the same game show how many blocks a cache
+ * would have found again. The cycle counter is the virtual counter (CNTVCT_EL0); its frequency is printed too. */
+static volatile uint64_t g_cb_compile_ticks = 0;
+static volatile uint64_t g_cb_compile_max_ticks = 0;
+static volatile uint64_t g_cb_sample_file = 0;
+static volatile uint64_t g_cb_sample_anon = 0;
+namespace FEXCore::MadeiraCbCost {
+volatile uint64_t PublishFlushTicks = 0;
+volatile uint64_t PublishFlushCalls = 0;
+volatile uint64_t LinkFlushCalls = 0;
+} // namespace FEXCore::MadeiraCbCost
+
+static inline uint64_t MadeiraCbTicks() {
+#ifdef ARCHITECTURE_arm64
+  uint64_t Value;
+  __asm volatile("mrs %0, CNTVCT_EL0" : "=r"(Value));
+  return Value;
+#else
+  return 0;
+#endif
+}
+
+static inline void MadeiraCbAddCompileTicks(uint64_t Delta) {
+  __sync_add_and_fetch(&g_cb_compile_ticks, Delta);
+  uint64_t Prev = g_cb_compile_max_ticks;
+  while (Delta > Prev && !__sync_bool_compare_and_swap(&g_cb_compile_max_ticks, Prev, Delta)) {
+    Prev = g_cb_compile_max_ticks;
+  }
+}
+
 #if defined(FEX_IOS_HOST) && defined(_WIN32)
 /* iOS-Madeira ml460 (#75): pool-tail sweeper, implemented by the ARM64EC
  * frontend (Module.cpp) which owns the thread registry. extern "C" so the
@@ -1959,6 +1992,18 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
                         Frame ? Frame->State.L1Mask : 0,
                         (T && T->LookupCache) ? T->LookupCache->GetL1Pointer() : 0);
 
+      /* madeira-bcd (2026-11-02, FEX cache measurement): the cost side of the same counters. */
+      {
+        const uint64_t Freq = FEXCore::GetCycleCounterFrequency();
+        auto ToUs = [Freq](uint64_t Ticks) -> uint64_t { return Freq ? (Ticks / Freq) * 1000000ull + (Ticks % Freq) * 1000000ull / Freq : 0; };
+        const uint64_t CompileUs = ToUs(g_cb_compile_ticks);
+        LogMan::Msg::EFmt("[CB_COST] compiles={} compile_ms={} avg_us={} max_us={} flush_ms={} flush_calls={} "
+                          "link_flushes={} samples_file={} samples_anon={} freq={}",
+                          reals, CompileUs / 1000, reals ? CompileUs / reals : 0, ToUs(g_cb_compile_max_ticks),
+                          ToUs(FEXCore::MadeiraCbCost::PublishFlushTicks) / 1000, FEXCore::MadeiraCbCost::PublishFlushCalls,
+                          FEXCore::MadeiraCbCost::LinkFlushCalls, g_cb_sample_file, g_cb_sample_anon, Freq);
+      }
+
       /* iOS-Madeira ml622: drain the rpmalloc remote-free CAS snapshot HERE —
        * outside rpmalloc, where formatting is safe. The allocator side only ever
        * copies scalars into a POD and sets a flag; it must never format, because
@@ -2165,7 +2210,9 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     FEXCore::Utils::WritePriorityMutex::IosAdjustUnpublishedCompileDepth(1);
   }
 #endif
+  const uint64_t MadeiraCbT0 = MadeiraCbTicks();
   auto [CompiledCode, DebugData, StartAddr, Length, NeedsAddGuestCodeRanges] = CompileCode(Thread, GuestRIP, MaxInst);
+  MadeiraCbAddCompileTicks(MadeiraCbTicks() - MadeiraCbT0);
 #ifdef FEX_IOS_HOST
   if (IosUnpublished) {
     FEXCore::Utils::WritePriorityMutex::IosAdjustUnpublishedCompileDepth(-1);
@@ -2268,6 +2315,34 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
 
   for (auto [GuestAddr, HostAddr] : CompiledCode.EntryPoints) {
     Thread->LookupCache->AddBlockMapping(Thread, GuestAddr, CodePages, HostAddr);
+  }
+
+  /* madeira-bcd (2026-11-02, FEX cache measurement; log only): sample 1 in 128 compiled blocks by the low 16 bits
+   * of the guest address. Image bases are 64 KB aligned, so a block of a file keeps them when ASLR moves its module
+   * and the same blocks are picked at every launch. A file-backed block is logged by file id and offset (the
+   * "Load module" lines name the file id), anonymous code (Mono/.NET/V8 output) by address. The same block twice in
+   * one log was compiled again (code buffer cycle or invalidation). At most 3000 lines per process;
+   * MADEIRA_FEX_CB_SAMPLE=0 turns the lines off. Here the block is published and no emission lock is held: the same
+   * place upstream's code-map writer asks the image tracker. Only the file id is read, never the file name. */
+  {
+    static int MadeiraSampleOn = -1;
+    if (MadeiraSampleOn < 0) {
+      const char* Env = getenv("MADEIRA_FEX_CB_SAMPLE");
+      MadeiraSampleOn = (Env && Env[0] == '0') ? 0 : 1;
+    }
+    static std::atomic<uint32_t> MadeiraSampleLines {0};
+    const uint64_t Low = GuestRIP & 0xFFFFull;
+    if (MadeiraSampleOn == 1 && ((Low * 0x9E3779B97F4A7C15ull) >> 57) == 0 && SyscallHandler &&
+        MadeiraSampleLines.fetch_add(1, std::memory_order_relaxed) < 3000) {
+      auto Region = SyscallHandler->LookupExecutableFileSection(Thread, GuestRIP);
+      if (Region) {
+        __sync_add_and_fetch(&g_cb_sample_file, 1);
+        LogMan::Msg::EFmt("[cb-sample] f {:x} {:x}", Region->FileInfo.FileId, GuestRIP - Region->FileStartVA);
+      } else {
+        __sync_add_and_fetch(&g_cb_sample_anon, 1);
+        LogMan::Msg::EFmt("[cb-sample] a {:x}", GuestRIP);
+      }
+    }
   }
 
   if (CodeMapWriter) {

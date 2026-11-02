@@ -24,9 +24,17 @@ $end_info$
 // icache lines (prefill NOPs) and slid into block-tail data: every
 // Thumper-desktop ILL pc was exactly 64-byte cache-line aligned.
 extern "C" long NtFlushInstructionCache(void* Handle, const void* Addr, unsigned long long Size);
+// madeira-bcd (2026-11-02, FEX cache measurement; log only): flush counters, printed by Core.cpp's [CB_COST].
+#include <cstdint>
+namespace FEXCore::MadeiraCbCost {
+extern volatile uint64_t PublishFlushTicks;
+extern volatile uint64_t PublishFlushCalls;
+extern volatile uint64_t LinkFlushCalls;
+} // namespace FEXCore::MadeiraCbCost
 namespace {
 inline void IOSFlushOneInstr(void* RWAddr, void* RXAddr) {
   (void)RWAddr; // dcache clean by RX VA reaches the same physical lines (PIPT)
+  __sync_add_and_fetch(&FEXCore::MadeiraCbCost::LinkFlushCalls, 1);
   NtFlushInstructionCache(reinterpret_cast<void*>(~0ull), RXAddr, 4);
 }
 }  // namespace
@@ -1414,7 +1422,14 @@ CPUBackend::CompiledCode Arm64JITCore::CompileCode(uint64_t Entry, uint64_t Size
   // boundary. The kernel IPI in the blessed flush closes that window;
   // dcache clean by RX VA reaches the physical lines dirtied via the
   // RW alias (PIPT). Pool RX pages are readable, so dc-by-RX is safe.
-  NtFlushInstructionCache(reinterpret_cast<void*>(~0ull), CodeBegin, CodeOnlySize);
+  {
+    uint64_t MadeiraT0, MadeiraT1;
+    __asm volatile("mrs %0, CNTVCT_EL0" : "=r"(MadeiraT0));
+    NtFlushInstructionCache(reinterpret_cast<void*>(~0ull), CodeBegin, CodeOnlySize);
+    __asm volatile("mrs %0, CNTVCT_EL0" : "=r"(MadeiraT1));
+    __sync_add_and_fetch(&FEXCore::MadeiraCbCost::PublishFlushTicks, MadeiraT1 - MadeiraT0);
+    __sync_add_and_fetch(&FEXCore::MadeiraCbCost::PublishFlushCalls, 1);
+  }
 #else
   ClearICache(CodeBegin, CodeOnlySize);
 #endif
