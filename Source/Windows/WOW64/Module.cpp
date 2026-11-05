@@ -960,6 +960,14 @@ public:
     InvalidationTracker->InvalidateAlignedInterval(GuestWindow::ToHost(Start), Length, false);
   }
 
+  // madeira-bcd (round 632): FEXCore asks with a GUEST page (BlockInfo->CodePages); the tracker keeps its hot pages by HOST
+  // address. A page that has turned hot (MADEIRA_SMC_HOT_PAGE) is no longer write-protected, so every block compiled from it
+  // has to validate its own code, as in the ARM64EC module. Upstream's WOW64 commit enabled the tracker's hot pages without this
+  // override, which left such blocks unchecked. Always false while MADEIRA_SMC_HOT_PAGE is off.
+  bool IsHotSMCCodePage(uint64_t Address) override {
+    return InvalidationTracker->IsHotSMCPage(GuestWindow::ToHost(Address));
+  }
+
   // ml1277: NOT guest addresses. The only caller is FEXCore's LookupCache, which marks its own
   // host allocation (the per-thread L1/L2 arrays in the FEX arena). Adding the window base
   // registered a range nobody touches, so after a code-buffer change decommitted a thread's L1
@@ -1901,11 +1909,14 @@ bool BTCpuResetToConsistentStateImpl(EXCEPTION_POINTERS* Ptrs) {
     if (Thread) {
       std::scoped_lock Lock(ThreadCreationMutex);
       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
-      if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, FaultAddress)) {
+      bool SmcHotPage = false;
+      if (InvalidationTracker->HandleRWXAccessViolation(Thread, Context->Pc, FaultAddress, &SmcHotPage)) {
         // MADEIRA: IsAddressInCurrentBlock compares against the block's guest RIP, so this one
         // needs the fault address in the guest namespace - unlike everything else on this path.
         const auto GuestFaultAddress = GuestWindow::ToGuestIfInWindow(FaultAddress);
-        if (CTX->IsAddressInCodeBuffer(Thread, Context->Pc) && !CTX->IsCurrentBlockSingleInst(Thread) &&
+        // madeira-bcd (round 632): as in the ARM64EC module, a fault on a page that was already hot only made it writable
+        // again, and the blocks compiled from it check their own code, so the write needs no inline single step.
+        if (!SmcHotPage && CTX->IsAddressInCodeBuffer(Thread, Context->Pc) && !CTX->IsCurrentBlockSingleInst(Thread) &&
             CTX->IsAddressInCurrentBlock(Thread, GuestFaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
           Context::ReconstructThreadState(TLS, Context);
           LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", Context->Pc,
