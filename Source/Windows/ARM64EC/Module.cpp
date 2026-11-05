@@ -838,6 +838,10 @@ public:
   }
 
   bool IsHotSMCCodePage(uint64_t Address) override {
+    // madeira-bcd (round 632): no page can be hot while MADEIRA_SMC_HOT_PAGE is off, so a compile asks nothing more.
+    if (!InvalidationTracker->HotSMCPagesEnabled()) {
+      return false;
+    }
 #ifdef FEX_IOS_HOST
     // Code compiled from a pool-copy alias: the tracker knows the page by its PE address.
     const uint64_t OrigAddr = IosJitReverseTranslate(Address);

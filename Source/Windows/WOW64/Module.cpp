@@ -965,7 +965,7 @@ public:
   // has to validate its own code, as in the ARM64EC module. Upstream's WOW64 commit enabled the tracker's hot pages without this
   // override, which left such blocks unchecked. Always false while MADEIRA_SMC_HOT_PAGE is off.
   bool IsHotSMCCodePage(uint64_t Address) override {
-    return InvalidationTracker->IsHotSMCPage(GuestWindow::ToHost(Address));
+    return InvalidationTracker->HotSMCPagesEnabled() && InvalidationTracker->IsHotSMCPage(GuestWindow::ToHost(Address));
   }
 
   // ml1277: NOT guest addresses. The only caller is FEXCore's LookupCache, which marks its own
