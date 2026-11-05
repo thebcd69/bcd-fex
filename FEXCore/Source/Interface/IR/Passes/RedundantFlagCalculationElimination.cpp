@@ -19,6 +19,8 @@ $end_info$
 #include <FEXCore/fextl/deque.h>
 #include <FEXCore/fextl/vector.h>
 
+#include <cstdlib> // madeira-bcd: getenv for MADEIRA_FEX_KEEP_DEAD_LOADS
+
 // Flag bit flags
 #define FLAG_V (1U << 0)
 #define FLAG_C (1U << 1)
@@ -542,6 +544,24 @@ FlagInfo DeadFlagCalculationEliminination::Classify(IROp_Header* IROp) {
   FEX_UNREACHABLE;
 }
 
+#if defined(_WIN32)
+// madeira-bcd (round 632): keeping an x86 load whose value nothing reads is what x86 does, but it changes the code every program
+// gets: each dead load stays, and a load whose only result is flags (a stack probe such as `test rcx,[rcx]` in MinGW's ___chkstk_ms)
+// would touch its page again. So it is opt-in: env.MADEIRA_FEX_KEEP_DEAD_LOADS=1 (exactly "1"), read once, at the first dead load this
+// pass meets; unset or any other value, this pass removes such loads exactly as it did before.
+static bool KeepDeadLoads() {
+  static const bool On = [] {
+    const char* Env = getenv("MADEIRA_FEX_KEEP_DEAD_LOADS");
+    const bool Value = Env && Env[0] == '1' && Env[1] == '\0';
+    if (Value) {
+      LogMan::Msg::IFmt("[fex-keep-loads] MADEIRA_FEX_KEEP_DEAD_LOADS=1: x86 loads whose value is unused are kept");
+    }
+    return Value;
+  }();
+  return On;
+}
+#endif
+
 // General purpose dead code elimination. Returns whether flag handling should
 // be skipped (because it was removed or could not possibly affect flags).
 bool DeadFlagCalculationEliminination::EliminateDeadCode(IREmitter* IREmit, Ref CodeNode, IROp_Header* IROp) {
@@ -554,7 +574,7 @@ bool DeadFlagCalculationEliminination::EliminateDeadCode(IREmitter* IREmit, Ref 
   // An x86 load can fault even when nothing reads its value, and programs rely on that: HotSpot
   // stops compiled loops at a safepoint with `test eax, [polling_page]`, whose only results are
   // flags, then makes the page unreadable. Removing the load left such a loop unstoppable.
-  if (IROp->Op == OP_LOADMEM || IROp->Op == OP_LOADMEMTSO) {
+  if ((IROp->Op == OP_LOADMEM || IROp->Op == OP_LOADMEMTSO) && KeepDeadLoads()) {
     return false;
   }
 #endif
