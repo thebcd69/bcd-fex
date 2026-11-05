@@ -2424,18 +2424,21 @@ void ContextImpl::InvalidateCodeBuffersCodeRange(uint64_t Start, uint64_t Length
  * On the iOS host nothing reads the stack's contents: the RET shortcut (BranchOps.cpp, ml305) and the
  * EnterEC return (Dispatcher.cpp) are compiled out, so a skipped reset leaves only entries nobody trusts,
  * and what the reset still does is reclaim the stack's pages. A stream of SMC writes paid a 16 MB
- * decommit + recommit per thread for every invalidation. MADEIRA_CALLRET_RESET_RATE: unset = at most one
- * such reset per thread every 50 ms, N = every N ms, 0 = every invalidation (the old behaviour).
+ * decommit + recommit per thread for every invalidation. MADEIRA_CALLRET_RESET_RATE: N = at most one
+ * such reset per thread every N ms; madeira-bcd (round 632): unset, empty, 0 or a non-number = every
+ * invalidation resets, as before (upstream's default is 50 ms).
  * NOTE: the caller holds CodeInvalidationMutex exclusively, which serialises the table. */
 static bool IosSkipInvalidationCallRetReset(FEXCore::Core::InternalThreadState* Thread) {
   static uint64_t IntervalTicks = ~0ULL;
   if (IntervalTicks == ~0ULL) {
-    uint64_t Ms = 50;
+    uint64_t Ms = 0;
     if (const char* Rate = getenv("MADEIRA_CALLRET_RESET_RATE"); Rate && *Rate) {
       Ms = strtoull(Rate, nullptr, 0);
     }
-    uint64_t Frequency;
-    __asm volatile("mrs %0, cntfrq_el0" : "=r"(Frequency));
+    uint64_t Frequency = 0;
+    if (Ms) {
+      __asm volatile("mrs %0, cntfrq_el0" : "=r"(Frequency));
+    }
     IntervalTicks = Frequency / 1000 * Ms;
   }
   if (!IntervalTicks) {

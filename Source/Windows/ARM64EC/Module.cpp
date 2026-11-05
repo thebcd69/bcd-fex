@@ -1212,14 +1212,17 @@ NTSTATUS ProcessInit() {
 #endif
   InvalidationTracker.emplace(*CTX, Threads);
   {
-    // MADEIRA: hot SMC pages (InvalidationTracker::EnableHotSMCPages). MADEIRA_SMC_HOT_PAGE: unset = 64 write
-    // faults within a second, 0 = off (every write to a code page invalidates it), N = threshold.
-    uint32_t HotThreshold = 64;
+    // MADEIRA: hot SMC pages (InvalidationTracker::EnableHotSMCPages). madeira-bcd (round 632): OFF unless
+    // env.MADEIRA_SMC_HOT_PAGE names a threshold N (N write faults within a second make a page hot; unset, empty,
+    // 0 or a non-number = off: every write to a code page invalidates it, as before). Upstream's default is 64.
+    uint32_t HotThreshold = 0;
     if (const char* Hot = getenv("MADEIRA_SMC_HOT_PAGE"); Hot && *Hot) {
       HotThreshold = static_cast<uint32_t>(strtoul(Hot, nullptr, 0));
     }
     InvalidationTracker->EnableHotSMCPages(HotThreshold);
-    LogMan::Msg::EFmt("[smc-hot] hot SMC pages {} (threshold {} write faults per second)", HotThreshold ? "on" : "off", HotThreshold);
+    if (HotThreshold) {
+      LogMan::Msg::EFmt("[smc-hot] hot SMC pages on (threshold {} write faults per second)", HotThreshold);
+    }
   }
   ImageTracker.emplace(*CTX, false);
 
@@ -1363,12 +1366,18 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
         // If we are not patching ourself (single inst block case) and potentially patching the current block, this is inline SMC. Reconstruct the current context (before the SMC write) then single step the write to reduce it to regular SMC.
         Exception::ReconstructThreadState(Thread, *NativeContext);
         // MADEIRA: one line per fault flooded the log (a data write next to its code faults thousands of
-        // times a second); keep the first 16, then 1 in 4096.
-        static std::atomic<uint64_t> InlineSmcCount {0};
-        const uint64_t InlineN = InlineSmcCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (InlineN <= 16 || (InlineN % 4096) == 0) {
-          LogMan::Msg::DFmt("Handled inline self-modifying code #{}: pc: {:X} rip: {:X} fault: {:X}", InlineN, NativeContext->Pc,
+        // times a second); keep the first 16, then 1 in 4096. madeira-bcd (round 632): only with hot pages on;
+        // without MADEIRA_SMC_HOT_PAGE every fault keeps its line, as before (auto-tune counts them).
+        if (!InvalidationTracker->HotSMCPagesEnabled()) {
+          LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", NativeContext->Pc,
                             Thread->CurrentFrame->State.rip, FaultAddress);
+        } else {
+          static std::atomic<uint64_t> InlineSmcCount {0};
+          const uint64_t InlineN = InlineSmcCount.fetch_add(1, std::memory_order_relaxed) + 1;
+          if (InlineN <= 16 || (InlineN % 4096) == 0) {
+            LogMan::Msg::DFmt("Handled inline self-modifying code #{}: pc: {:X} rip: {:X} fault: {:X}", InlineN, NativeContext->Pc,
+                              Thread->CurrentFrame->State.rip, FaultAddress);
+          }
         }
         NativeContext->Pc = CPUArea.DispatcherLoopTopEnterECFillSRA();
         NativeContext->Sp = CPUArea.EmulatorStackBase();

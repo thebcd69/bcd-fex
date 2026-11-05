@@ -587,6 +587,11 @@ bool InvalidationTracker::IsHotSMCPage(uint64_t Address) const {
 }
 
 bool InvalidationTracker::CountSMCWriteFault(uint64_t Page) {
+  // madeira-bcd (round 632): hot pages are off unless MADEIRA_SMC_HOT_PAGE names a threshold; then a write fault reads no clock and
+  // takes no lock (the threshold is written once, in EnableHotSMCPages, before any guest code runs).
+  if (!HotPageThreshold) {
+    return false;
+  }
   uint64_t Now, Frequency;
   __asm volatile("mrs %0, cntvct_el0" : "=r"(Now));
   __asm volatile("mrs %0, cntfrq_el0" : "=r"(Frequency));

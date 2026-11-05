@@ -62,6 +62,10 @@ public:
   // per-instruction code validation (SyscallHandler::IsHotSMCCodePage). Off until enabled; 0 disables.
   void EnableHotSMCPages(uint32_t Threshold);
   bool IsHotSMCPage(uint64_t Address) const;
+  // madeira-bcd: whether a threshold was set (written once, before any guest code runs).
+  bool HotSMCPagesEnabled() const {
+    return HotPageThreshold != 0;
+  }
 
   // Unprotects any RWX intervals in the input interval and invalidates code
   // NOTE: CodeInvalidationMutex must be locked when calling this, and if true is returned, kept locked until the write ends.
