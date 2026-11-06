@@ -75,3 +75,12 @@ author.
   commits. The two files they add, `Source/Windows/WOW64/IosMonoBridge.cpp`
   and `Source/Windows/WOW64/IosTeb.h`, carry the author's own MIT notice
   (SPDX), which is GPL-compatible.
+
+- Taken from Madeira's FEX fork (`willfaust/FEX`, branch `ios-port-2607`) after the two forks diverged on 2026-10-15, or just before
+  it where this fork did not yet have them, with the authors kept in the commit history; Madeira accepts contributions
+  under `CONTRIBUTING.md` (GPL-3.0-or-later with the Madeira Converter Exception), and the copyright stays with the author. The first hash is the commit in this
+  fork, the second the same commit in Madeira's fork. **125hz**: `7b3d7edb465` (`68bb21cf49e`), 2026-10-11, hot SMC pages for
+  data that shares a page with code (this fork's version is adapted, and its behaviour is opt-in); `623756c9aec` (`e6055c96e5b`),
+  2026-10-25, the same for the WOW64 module. **Ixion**: `e6ac5f36a5e` (`2934fa4527f`), 2026-10-19, keep x86 loads whose value is
+  unused; `fff046661fc` (`dfcc614901d`), 2026-10-19, LookupCache: invalidate L1 entries under every dynamic L1 size. The pin moved to
+  them on 2026-11-05.
