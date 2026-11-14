@@ -252,11 +252,6 @@ struct alignas(64) CPUState {
   constexpr static uint32_t SEGMENT_ARRAY_INDEX_GDT = 0;
   constexpr static uint32_t SEGMENT_ARRAY_INDEX_LDT = 1;
   Core::CPUState::gdt_segment private_gdt[32] {};
-
-  // shortcut: ARM64EC context conversions lose provenance, upgrade when they preserve full x87 values.
-  // Kept separate from ARM64EC's mm state.
-  alignas(16) uint64_t x87_exact_int[8][2] {};
-  uint8_t x87_exact_valid {};
 };
 static_assert(std::is_trivially_copyable_v<CPUState>, "Needs to be trivial");
 static_assert(std::is_standard_layout_v<CPUState>, "This needs to be standard layout");
@@ -510,7 +505,31 @@ struct CpuStateFrame {
   uint64_t IosXpCallCount {};
   uint64_t IosAliasHint {};
 #endif
+  // madeira-bcd x87-exact: added {
+
+  /* madeira-bcd x87-exact (env MADEIRA_FEX_X87_EXACT_INT64=1, default off; FEXCore::FPState::X87ExactInt64): reduced-precision
+   * x87 keeps the 64-bit integer of a FILD m64 beside the double it became, so that a FISTP m64 of the unchanged value stores
+   * it exactly (x87_exact_int[physical slot][0]; bit <physical slot> of x87_exact_valid says the integer is the slot's value).
+   * Madeira's fork keeps these two at the end of CPUState, which moves every member of this frame after State by 192 bytes
+   * (the JIT pointer table, the offsets ARM64EC/Module.S reads). Here they are appended after all existing fields instead:
+   * no offset of CPUState or of this frame moves, so with the switch off the JIT emits what it emitted before. They are read
+   * and written only with the switch on.
+   * shortcut: ARM64EC context conversions lose provenance, upgrade when they preserve full x87 values.
+   * Kept separate from ARM64EC's mm state. */
+  alignas(16) uint64_t x87_exact_int[8][2] {};
+  uint32_t x87_exact_valid {};
+  // madeira-bcd x87-exact: added }
 };
+// madeira-bcd x87-exact: added {
+// The JIT addresses both from STATE (LoadContext / StoreContext immediates; a release build does not check the range): a
+// 32-bit access reaches 16380, a 64-bit one 32760.
+static_assert(offsetof(CpuStateFrame, State) == 0, "STATE is the frame and the CPU state");
+static_assert(offsetof(CpuStateFrame, x87_exact_valid) % 4 == 0 && offsetof(CpuStateFrame, x87_exact_valid) <= 16380,
+              "x87_exact_valid must be in LoadContext's 32-bit immediate range");
+static_assert(offsetof(CpuStateFrame, x87_exact_int) % 16 == 0 &&
+                offsetof(CpuStateFrame, x87_exact_int) + sizeof(CpuStateFrame::x87_exact_int) <= 32760,
+              "x87_exact_int must be in the 64-bit immediate range");
+// madeira-bcd x87-exact: added }
 
 #if defined(FEX_IOS_HOST) && defined(ARCHITECTURE_arm64ec)
 extern uint32_t IosGuestBranchTraceEnabled;

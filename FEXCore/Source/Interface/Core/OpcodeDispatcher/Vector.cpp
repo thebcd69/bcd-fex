@@ -3112,7 +3112,11 @@ void OpDispatchBuilder::SaveX87State(OpcodeArgs, Ref MemBase) {
   for (uint32_t i = 0; i < Core::CPUState::NUM_MMS; ++i) {
     Ref data = _LoadContextFPRIndexed(Top, LoadSize, MMBaseOffset(), IR::OpSizeToSize(OpSize::i128Bit));
     if (ReducedPrecisionMode) {
-      data = SaveReducedX87Value(Top, data);
+      if (FPState::X87ExactInt64()) { // madeira-bcd x87-exact: on
+        data = SaveReducedX87Value(Top, data);
+      } else { // madeira-bcd x87-exact: off
+        data = _F80CVTTo(data, OpSize::i64Bit);
+      } // madeira-bcd x87-exact: end
     }
     _StoreMemFPR(OpSize::i128Bit, data, MemBase, Constant(16 * i + 32), OpSize::i8Bit, MemOffsetType::SXTX, 1);
     Top = _And(OpSize::i32Bit, Add(OpSize::i32Bit, Top, 1), SevenConst);
@@ -3227,7 +3231,9 @@ void OpDispatchBuilder::XRstorOpImpl(OpcodeArgs) {
 
 void OpDispatchBuilder::RestoreX87State(Ref MemBase) {
   _StackForceSlow();
-  _StoreContextGPR(OpSize::i8Bit, Constant(0), offsetof(FEXCore::Core::CPUState, x87_exact_valid));
+  if (FPState::X87ExactInt64()) { // madeira-bcd x87-exact: on
+    _StoreContextGPR(OpSize::i32Bit, Constant(0), offsetof(FEXCore::Core::CpuStateFrame, x87_exact_valid));
+  } // madeira-bcd x87-exact: end
 
   auto NewFCW = _LoadMemGPR(OpSize::i16Bit, MemBase, OpSize::i16Bit);
   _StoreContextGPR(OpSize::i16Bit, NewFCW, offsetof(FEXCore::Core::CPUState, FCW));
@@ -3243,20 +3249,29 @@ void OpDispatchBuilder::RestoreX87State(Ref MemBase) {
     _StoreContextGPR(OpSize::i8Bit, NewFTW, offsetof(FEXCore::Core::CPUState, AbridgedFTW));
   }
 
-  Ref Top = GetX87Top();
-  Ref ExactMask = Constant(0);
-  for (uint32_t i = 0; i < Core::CPUState::NUM_MMS; ++i) {
-    Ref Value = _LoadMemFPR(OpSize::i128Bit, MemBase, Constant(i * 16 + 32), OpSize::i8Bit, MemOffsetType::SXTX, 1);
-    if (ReducedPrecisionMode) {
-      ExactMask = RestoreReducedX87Value(Top, Value, ExactMask);
-      Value = _F80CVT(OpSize::i64Bit, Value);
+  if (FPState::X87ExactInt64()) { // madeira-bcd x87-exact: on
+    // The registers of an FXSAVE image are in stack order (SaveX87State), and in reduced precision they are doubles here.
+    Ref Top = GetX87Top();
+    Ref ExactMask = Constant(0);
+    for (uint32_t i = 0; i < Core::CPUState::NUM_MMS; ++i) {
+      Ref Value = _LoadMemFPR(OpSize::i128Bit, MemBase, Constant(i * 16 + 32), OpSize::i8Bit, MemOffsetType::SXTX, 1);
+      if (ReducedPrecisionMode) {
+        ExactMask = RestoreReducedX87Value(Top, Value, ExactMask);
+        Value = _F80CVT(OpSize::i64Bit, Value);
+      }
+      _StoreContextFPRIndexed(Value, Top, ReducedPrecisionMode ? OpSize::i64Bit : OpSize::i128Bit, MMBaseOffset(), 16);
+      Top = _And(OpSize::i32Bit, Add(OpSize::i32Bit, Top, 1), Constant(7));
     }
-    _StoreContextFPRIndexed(Value, Top, ReducedPrecisionMode ? OpSize::i64Bit : OpSize::i128Bit, MMBaseOffset(), 16);
-    Top = _And(OpSize::i32Bit, Add(OpSize::i32Bit, Top, 1), Constant(7));
-  }
-  if (ReducedPrecisionMode) {
-    _StoreContextGPR(OpSize::i8Bit, ExactMask, offsetof(Core::CPUState, x87_exact_valid));
-  }
+    if (ReducedPrecisionMode) {
+      _StoreContextGPR(OpSize::i32Bit, ExactMask, offsetof(Core::CpuStateFrame, x87_exact_valid));
+    }
+  } else { // madeira-bcd x87-exact: off
+    for (uint32_t i = 0; i < Core::CPUState::NUM_MMS; i += 2) {
+      auto MMRegs = LoadMemPairFPR(OpSize::i128Bit, MemBase, i * 16 + 32);
+      _StoreContextFPR(OpSize::i128Bit, MMRegs.Low, MMBaseOffset() + i * 16);
+      _StoreContextFPR(OpSize::i128Bit, MMRegs.High, MMBaseOffset() + (i + 1) * 16);
+    }
+  } // madeira-bcd x87-exact: end
 }
 
 void OpDispatchBuilder::RestoreSSEState(Ref MemBase) {
@@ -3296,7 +3311,9 @@ void OpDispatchBuilder::DefaultX87State(OpcodeArgs) {
   // We can piggy-back on FNINIT's implementation, since
   // it performs the same behavior as required by XRSTOR for resetting flags
   FNINIT(Op);
-  _StoreContextGPR(OpSize::i8Bit, Constant(0), offsetof(FEXCore::Core::CPUState, x87_exact_valid));
+  if (FPState::X87ExactInt64()) { // madeira-bcd x87-exact: on
+    _StoreContextGPR(OpSize::i32Bit, Constant(0), offsetof(FEXCore::Core::CpuStateFrame, x87_exact_valid));
+  } // madeira-bcd x87-exact: end
 
   // On top of resetting the flags to a default state, we also need to clear
   // all of the ST0-7/MM0-7 registers to zero.

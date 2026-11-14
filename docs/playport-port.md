@@ -6,3 +6,7 @@ GPL-3.0-or-later with the Madeira Converter Exception, version 1, as recorded in
 https://github.com/playportdev/playport/blob/412de5f8c0bdd26d84e0127eb5776ba992e3b152/docs/LICENSING.md.
 Upstream code retains its existing notices. This port targets the Madeira fork.
 It does not change the BCD fork or depend on the upcoming BCD app port.
+
+BCD note (2026-11-14): BCD's FEX fork took this port from Madeira's fork (`willfaust/FEX`, branch
+`codex/fex-runtime-consolidation`), with its commits and their author kept; see LICENSE-MADEIRA.md. In this fork it is
+opt-in (`MADEIRA_FEX_X87_EXACT_INT64=1`).

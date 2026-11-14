@@ -84,3 +84,14 @@ author.
   2026-10-25, the same for the WOW64 module. **Ixion**: `e6ac5f36a5e` (`2934fa4527f`), 2026-10-19, keep x86 loads whose value is
   unused; `fff046661fc` (`dfcc614901d`), 2026-10-19, LookupCache: invalidate L1 entries under every dynamic L1 size. The pin moved to
   them on 2026-11-05.
+
+- Taken on 2026-11-14 from Madeira's FEX fork, branch `codex/fex-runtime-consolidation` (not yet on its `ios-port-2607`), with the
+  author kept in the commit history: sixteen commits by **intraducine** (2026-10-28 to 2026-11-12) that keep the 64-bit integer of an
+  x87 `FILD m64` exact for `FISTP m64` in reduced-precision x87, through FXSAVE / FNSAVE images and WOW64 and signal contexts.
+  Madeira's hashes, oldest first: `ad1a3db3508`, `d8c471d121f`, `a3814bdcfbb`, `fbfd6a96a3a`, `1db8f15cf7b`, `3da133a2f02`,
+  `ba856bf37a1`, `70f953e739c`, `7d760b69113`, `f183e376a0d`, `a39fc7d3380`, `b578cd3caf8`, `755d3647f24`, `f98f561bcca`,
+  `e1ee43c33f5`, `1de436303ff`; this fork's commits have the same subjects and author. The first of them ports the Playport
+  authors' work (`playportdev/playport` commit `412de5f8c0bdd26d84e0127eb5776ba992e3b152`), who keep the copyright in their
+  changes: GPL-3.0-or-later with the Madeira Converter Exception, see `docs/playport-port.md`. In this fork the behaviour is
+  opt-in (`MADEIRA_FEX_X87_EXACT_INT64=1`), the integers are kept at the end of the JIT's frame instead of the CPU state, and
+  Madeira's `01c5e4b0fbd` (full x87 precision for every ARM64EC process) is not taken.

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Execute the pass's provenance emission against a small host context model."""
+"""Execute the pass's provenance emission against a small host context model.
+
+madeira-bcd x87-exact: the model is the frame (the integers and their 32-bit mask are at its end, CoreState.h) and the switch
+(FPState::X87ExactInt64) is on here; with it off the pass emits none of this."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,7 +14,7 @@ start = source.index('  auto Size = ReducedPrecisionMode ? OpSize::i64Bit : OpSi
 end = source.index('  if (FlushValidPending)', start)
 flush = source[start:end]
 start = source.index('inline std::pair<Ref, Ref> X87StackOptimization::LoadExactInt_Slow(')
-end = source.index('\n\ninline Ref X87StackOptimization::LoadStackValueAtOffset_Slow', start)
+end = source.index('\n\n// madeira-bcd x87-exact: added }\ninline Ref X87StackOptimization::LoadStackValueAtOffset_Slow', start)
 load_exact = source[start:end].replace('inline std::pair<Ref, Ref> X87StackOptimization::', 'static std::pair<Ref, Ref> ')
 pos = source.index('case OP_READSTACKINT64:')
 start = source.index('        } else {\n          auto [Exact, Valid] = LoadExactInt_Slow(0);', pos)
@@ -22,8 +25,8 @@ start = source.index('          Ref St0 = LoadStackValueAtOffset_Slow(Offset);',
 end = source.index('\n        } else {', start)
 copy = source[start:end]
 pos = source.index('case OP_STORESTACKTOSTACK:')
-start = source.index('            Ref Value = LoadStackValueAtOffset_Slow();', pos)
-end = source.index('\n          } else {', start)
+start = source.index('              Ref Value = LoadStackValueAtOffset_Slow();', pos)
+end = source.index('\n            } else { // madeira-bcd x87-exact: off', start)
 store_copy = source[start:end]
 pos = source.index('case OP_F80STACKXCHANGE:')
 start = source.index('          Ref ValueTop = LoadStackValue();', pos)
@@ -37,7 +40,8 @@ prelude = r'''
 #include <cstdint>
 #include <cstring>
 #include <utility>
-namespace Core { struct CPUState { uint64_t mm[8][2]{}; uint64_t x87_exact_int[8][2]{}; uint8_t x87_exact_valid{}; uint8_t ftw{}; }; }
+namespace Core { struct CpuStateFrame { uint64_t mm[8][2]{}; uint64_t x87_exact_int[8][2]{}; uint32_t x87_exact_valid{}; uint8_t ftw{}; }; }
+namespace FPState { static bool X87ExactInt64() { return true; } }
 struct Node { uint64_t value; };
 using Ref = Node*; using OrderedNode = Node;
 static Node* node(uint64_t v) { return new Node{v}; }
@@ -45,12 +49,12 @@ enum class OpSize { i8Bit, i32Bit, i64Bit, i128Bit };
 enum class MemOffsetType { SXTX };
 enum class CondClass { NEQ };
 static unsigned physical_top;
-static Core::CPUState state;
-static uint32_t MMBaseOffset() { return offsetof(Core::CPUState, mm); }
+static Core::CpuStateFrame state;
+static uint32_t MMBaseOffset() { return offsetof(Core::CpuStateFrame, mm); }
 struct Emitter {
   Ref _InlineConstant(uint64_t x) { return node(x); }
-  Ref _LoadContextGPR(OpSize, size_t off) { return node(*((uint8_t*)&state + off)); }
-  void _StoreContextGPR(OpSize, Ref v, size_t off) { *((uint8_t*)&state + off) = v->value; }
+  Ref _LoadContextGPR(OpSize s, size_t off) { assert(s == OpSize::i32Bit); uint32_t v; memcpy(&v, (uint8_t*)&state + off, 4); return node(v); }
+  void _StoreContextGPR(OpSize s, Ref v, size_t off) { assert(s == OpSize::i32Bit); uint32_t x = v->value; memcpy((uint8_t*)&state + off, &x, 4); }
   Ref _Lshl(OpSize, Ref a, Ref b) { return node((uint32_t)a->value << b->value); }
   Ref _Lshr(OpSize, Ref a, Ref b) { return node((uint32_t)a->value >> b->value); }
   Ref _Andn(OpSize, Ref a, Ref b) { return node(a->value & ~b->value); }

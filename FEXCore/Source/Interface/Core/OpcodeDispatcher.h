@@ -14,6 +14,7 @@
 #include <FEXCore/Core/X86Enums.h>
 #include <FEXCore/IR/IR.h>
 
+#include <FEXCore/Utils/FPState.h> // madeira-bcd x87-exact: added (X87ExactInt64)
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/MathUtils.h>
 #include <FEXCore/fextl/map.h>
@@ -2038,9 +2039,9 @@ private:
   void StoreContext(uint8_t Index, Ref Value) {
     LOGMAN_THROW_A_FMT(Index < 64, "valid index");
     LOGMAN_THROW_A_FMT(Value != InvalidNode, "storing valid");
-    if (Index >= MM0Index && Index <= MM7Index) {
-      _StoreContextGPR(OpSize::i8Bit, Constant(0), offsetof(FEXCore::Core::CPUState, x87_exact_valid));
-    }
+    if (FPState::X87ExactInt64() && Index >= MM0Index && Index <= MM7Index) { // madeira-bcd x87-exact: on
+      _StoreContextGPR(OpSize::i32Bit, Constant(0), offsetof(FEXCore::Core::CpuStateFrame, x87_exact_valid));
+    } // madeira-bcd x87-exact: end
 
     uint64_t Bit = (1ull << (uint64_t)Index);
 
@@ -2384,8 +2385,8 @@ private:
   /**  @} */
 
   Ref GetX87Top();
-  Ref SaveReducedX87Value(Ref Top, Ref Value);
-  Ref RestoreReducedX87Value(Ref Top, Ref Value, Ref Mask);
+  Ref SaveReducedX87Value(Ref Top, Ref Value); // madeira-bcd x87-exact: added (called only with the switch on)
+  Ref RestoreReducedX87Value(Ref Top, Ref Value, Ref Mask); // madeira-bcd x87-exact: added (called only with the switch on)
   void SetX87FTW(Ref FTW);
   Ref GetX87FTW_Helper();
   void SetX87Top(Ref Value);
@@ -2393,7 +2394,9 @@ private:
   void ChgStateX87_MMX() override {
     LOGMAN_THROW_A_FMT(MMXState == MMXState_X87, "Expected state to be x87");
     _StackForceSlow();
-    _StoreContextGPR(OpSize::i8Bit, Constant(0), offsetof(FEXCore::Core::CPUState, x87_exact_valid));
+    if (FPState::X87ExactInt64()) { // madeira-bcd x87-exact: on
+      _StoreContextGPR(OpSize::i32Bit, Constant(0), offsetof(FEXCore::Core::CpuStateFrame, x87_exact_valid));
+    } // madeira-bcd x87-exact: end
     SetX87Top(Constant(0)); // top reset to zero
     _StoreContextGPR(OpSize::i8Bit, Constant(0xFFFFUL), offsetof(FEXCore::Core::CPUState, AbridgedFTW));
     MMXState = MMXState_MMX;

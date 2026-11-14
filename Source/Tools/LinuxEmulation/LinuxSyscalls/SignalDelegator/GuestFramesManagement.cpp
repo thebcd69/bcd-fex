@@ -200,10 +200,10 @@ void SignalDelegator::RestoreFrame_x64(FEXCore::Core::InternalThreadState* Threa
     const uint16_t CurrentOffset = Frame->State.flags[FEXCore::X86State::X87FLAG_TOP_LOC];
     for (size_t i = 0; i < FEXCore::Core::CPUState::NUM_MMS; ++i) {
       const auto modulo_i = (i + CurrentOffset) % 8;
-      if (ReducedX87) {
+      if (ReducedX87 && FEXCore::FPState::X87ExactInt64()) { // madeira-bcd x87-exact: only with the switch on
         uint64_t Saved[2] {};
         memcpy(Saved, &fpstate->_st[i], sizeof(Saved));
-        FEXCore::FPState::ImportX87Register(Frame->State, modulo_i, Saved, true);
+        FEXCore::FPState::ImportX87Register(*Frame, modulo_i, Saved, true);
       } else {
         memcpy(&Frame->State.mm[modulo_i], &fpstate->_st[i], sizeof(Frame->State.mm[0]));
       }
@@ -284,10 +284,10 @@ void SignalDelegator::RestoreFrame_ia32(FEXCore::Core::InternalThreadState* Thre
     for (size_t i = 0; i < FEXCore::Core::CPUState::NUM_MMS; ++i) {
       // 32-bit st register size is only 10 bytes. Not padded to 16byte like x86-64
       const auto modulo_i = (i + CurrentOffset) % 8;
-      if (ReducedX87) {
+      if (ReducedX87 && FEXCore::FPState::X87ExactInt64()) { // madeira-bcd x87-exact: only with the switch on
         uint64_t Saved[2] {};
         memcpy(Saved, &fpstate->_st[i], 10);
-        FEXCore::FPState::ImportX87Register(Frame->State, modulo_i, Saved, true);
+        FEXCore::FPState::ImportX87Register(*Frame, modulo_i, Saved, true);
       } else {
         memcpy(&Frame->State.mm[modulo_i], &fpstate->_st[i], 10);
       }
@@ -369,10 +369,10 @@ void SignalDelegator::RestoreRTFrame_ia32(FEXCore::Core::InternalThreadState* Th
     for (size_t i = 0; i < FEXCore::Core::CPUState::NUM_MMS; ++i) {
       // 32-bit st register size is only 10 bytes. Not padded to 16byte like x86-64
       const auto modulo_i = (i + CurrentOffset) % 8;
-      if (ReducedX87) {
+      if (ReducedX87 && FEXCore::FPState::X87ExactInt64()) { // madeira-bcd x87-exact: only with the switch on
         uint64_t Saved[2] {};
         memcpy(Saved, &fpstate->_st[i], 10);
-        FEXCore::FPState::ImportX87Register(Frame->State, modulo_i, Saved, true);
+        FEXCore::FPState::ImportX87Register(*Frame, modulo_i, Saved, true);
       } else {
         memcpy(&Frame->State.mm[modulo_i], &fpstate->_st[i], 10);
       }
@@ -491,7 +491,7 @@ uint64_t SignalDelegator::SetupFrame_x64(FEXCore::Core::InternalThreadState* Thr
   for (size_t i = 0; i < FEXCore::Core::CPUState::NUM_MMS; ++i) {
     const auto modulo_i = (i + CurrentOffset) % 8;
     uint64_t Saved[2] {};
-    FEXCore::FPState::ExportX87Register(Frame->State, modulo_i, Saved, ReducedX87);
+    FEXCore::FPState::ExportX87Register(*Frame, modulo_i, Saved, ReducedX87 && FEXCore::FPState::X87ExactInt64()); // madeira-bcd x87-exact: a plain copy without the switch
     memcpy(&fpstate->_st[i], Saved, sizeof(Saved));
   }
 
@@ -616,7 +616,7 @@ uint64_t SignalDelegator::SetupFrame_ia32(FEXCore::Core::InternalThreadState* Th
   uint64_t Saved[8][2] {};
   for (size_t i = 0; i < FEXCore::Core::CPUState::NUM_MMS; ++i) {
     const auto modulo_i = (i + CurrentOffset) % 8;
-    FEXCore::FPState::ExportX87Register(Frame->State, modulo_i, Saved[i], ReducedX87);
+    FEXCore::FPState::ExportX87Register(*Frame, modulo_i, Saved[i], ReducedX87 && FEXCore::FPState::X87ExactInt64()); // madeira-bcd x87-exact: a plain copy without the switch
     memcpy(&fpstate->_st[i], Saved[i], 10);
   }
 
@@ -754,7 +754,7 @@ uint64_t SignalDelegator::SetupRTFrame_ia32(FEXCore::Core::InternalThreadState* 
   uint64_t Saved[8][2] {};
   for (size_t i = 0; i < FEXCore::Core::CPUState::NUM_MMS; ++i) {
     const auto modulo_i = (i + CurrentOffset) % 8;
-    FEXCore::FPState::ExportX87Register(Frame->State, modulo_i, Saved[i], ReducedX87);
+    FEXCore::FPState::ExportX87Register(*Frame, modulo_i, Saved[i], ReducedX87 && FEXCore::FPState::X87ExactInt64()); // madeira-bcd x87-exact: a plain copy without the switch
     memcpy(&fpstate->_st[i], Saved[i], 10);
   }
 

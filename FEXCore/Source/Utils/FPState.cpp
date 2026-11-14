@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <FEXCore/Utils/FPState.h>
 #include <FEXCore/Core/CoreState.h>
+#include <FEXCore/Utils/LogManager.h>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 extern "C" {
 #include "SoftFloat-3e/platform.h"
@@ -19,14 +21,28 @@ static softfloat_state StateFromControlWord(uint16_t FCW) {
   return State;
 }
 
-void ExportX87Register(const FEXCore::Core::CPUState& State, unsigned Slot, uint64_t (&Out)[2], bool Reduced) {
+// madeira-bcd x87-exact: see FPState.h. Exactly "1" turns it on; one line says so.
+bool X87ExactInt64() {
+  static const bool On = [] {
+    const char* Env = getenv("MADEIRA_FEX_X87_EXACT_INT64");
+    const bool Value = Env && Env[0] == '1' && Env[1] == '\0';
+    if (Value) {
+      LogMan::Msg::IFmt("[fex-x87-exact] MADEIRA_FEX_X87_EXACT_INT64=1: reduced-precision x87 keeps the 64-bit integer of FILD m64 for FISTP m64");
+    }
+    return Value;
+  }();
+  return On;
+}
+
+void ExportX87Register(const FEXCore::Core::CpuStateFrame& Frame, unsigned Slot, uint64_t (&Out)[2], bool Reduced) {
+  const auto& State = Frame.State;
   if (!Reduced) {
     memcpy(Out, State.mm[Slot], sizeof(Out));
     return;
   }
   extFloat80_t Value {};
-  if ((State.x87_exact_valid & State.AbridgedFTW) & (1u << Slot)) {
-    const uint64_t Bits = State.x87_exact_int[Slot][0];
+  if ((Frame.x87_exact_valid & State.AbridgedFTW) & (1u << Slot)) {
+    const uint64_t Bits = Frame.x87_exact_int[Slot][0];
     const bool Negative = (Bits >> 63) != 0;
     Value = ui64_to_extF80(Negative ? 0 - Bits : Bits);
     if (Negative) Value.signExp |= 0x8000;
@@ -38,8 +54,9 @@ void ExportX87Register(const FEXCore::Core::CPUState& State, unsigned Slot, uint
   Out[1] = Value.signExp;
 }
 
-void ImportX87Register(FEXCore::Core::CPUState& State, unsigned Slot, const uint64_t (&In)[2], bool Reduced) {
-  State.x87_exact_valid &= ~(1u << Slot);
+void ImportX87Register(FEXCore::Core::CpuStateFrame& Frame, unsigned Slot, const uint64_t (&In)[2], bool Reduced) {
+  auto& State = Frame.State;
+  Frame.x87_exact_valid &= ~(1u << Slot);
   if (!Reduced) {
     memcpy(State.mm[Slot], In, sizeof(In));
     return;
@@ -57,7 +74,7 @@ void ImportX87Register(FEXCore::Core::CPUState& State, unsigned Slot, const uint
   const uint64_t Magnitude = Value.signif >> Shift;
   if ((Magnitude << Shift) != Value.signif ||
       (Exponent == 0x403e && (!Negative || Value.signif != (1ULL << 63)))) return;
-  State.x87_exact_int[Slot][0] = Negative ? 0 - Magnitude : Magnitude;
-  State.x87_exact_valid |= 1u << Slot;
+  Frame.x87_exact_int[Slot][0] = Negative ? 0 - Magnitude : Magnitude;
+  Frame.x87_exact_valid |= 1u << Slot;
 }
 } // namespace FEXCore::FPState

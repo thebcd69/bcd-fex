@@ -554,8 +554,12 @@ namespace Context {
 // in the JIT. `Context` itself is a HOST pointer (ntdll's CPU area, or a caller stack temporary);
 // WowTEB is the GUEST TEB32 address, see GetWowTEB(). Applies to both directions and therefore to
 // BTCpuGetContext/BTCpuSetContext, which only move whole WOW64_CONTEXTs through ntdll.
+// madeira-bcd x87-exact: added {
+// True only in reduced-precision x87 with MADEIRA_FEX_X87_EXACT_INT64=1 (set once in BTCpuProcessInit): the x87 registers of a
+// WOW64 context are then converted to and from the 80-bit format. False (the default): they are copied as they are, as before.
 static bool WowReducedX87 {};
 
+// madeira-bcd x87-exact: added }
 void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread, uint64_t WowTEB, WOW64_CONTEXT* Context) {
   auto& State = Thread->CurrentFrame->State;
 
@@ -594,19 +598,20 @@ void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread, uint64_
   const auto* XSave = reinterpret_cast<XSAVE_FORMAT*>(Context->ExtendedRegisters);
 
   CTX->SetXMMRegistersFromState(Thread, reinterpret_cast<const __uint128_t*>(XSave->XmmRegisters), nullptr);
-  State.FCW = XSave->ControlWord;
-  State.x87_exact_valid = 0;
-  if (WowReducedX87) {
+  if (WowReducedX87) { // madeira-bcd x87-exact: on
+    // Every register is replaced: ImportX87Register drops each slot's integer and keeps it again only when the 80-bit value is one.
+    State.FCW = XSave->ControlWord; // the conversion rounds as the control word says
     const unsigned Top = (XSave->StatusWord >> 11) & 7;
     for (unsigned i = 0; i < 8; ++i) {
       uint64_t Saved[2] {};
       memcpy(Saved, &XSave->FloatRegisters[i], sizeof(Saved));
-      FEXCore::FPState::ImportX87Register(State, (i + Top) & 7, Saved, true);
+      FEXCore::FPState::ImportX87Register(*Thread->CurrentFrame, (i + Top) & 7, Saved, true);
     }
-  } else {
+  } else { // madeira-bcd x87-exact: off
     memcpy(State.mm, XSave->FloatRegisters, sizeof(State.mm));
-  }
+  } // madeira-bcd x87-exact: end
 
+  State.FCW = XSave->ControlWord;
   State.flags[FEXCore::X86State::X87FLAG_IE_LOC] = XSave->StatusWord & 1;
   State.flags[FEXCore::X86State::X87FLAG_C0_LOC] = (XSave->StatusWord >> 8) & 1;
   State.flags[FEXCore::X86State::X87FLAG_C1_LOC] = (XSave->StatusWord >> 9) & 1;
@@ -645,16 +650,16 @@ void StoreWowContextFromState(FEXCore::Core::InternalThreadState* Thread, WOW64_
   auto* XSave = reinterpret_cast<XSAVE_FORMAT*>(Context->ExtendedRegisters);
 
   CTX->ReconstructXMMRegisters(Thread, reinterpret_cast<__uint128_t*>(XSave->XmmRegisters), nullptr);
-  uint64_t SavedX87[8][2] {};
-  if (WowReducedX87) {
+  uint64_t SavedX87[8][2]; // madeira-bcd x87-exact: added (filled and read only with the switch on)
+  if (WowReducedX87) { // madeira-bcd x87-exact: on
     const unsigned Top = State.flags[FEXCore::X86State::X87FLAG_TOP_LOC];
     for (unsigned i = 0; i < 8; ++i) {
-      FEXCore::FPState::ExportX87Register(State, (i + Top) & 7, SavedX87[i], true);
+      FEXCore::FPState::ExportX87Register(*Thread->CurrentFrame, (i + Top) & 7, SavedX87[i], true);
     }
     memcpy(XSave->FloatRegisters, SavedX87, sizeof(SavedX87));
-  } else {
+  } else { // madeira-bcd x87-exact: off
     memcpy(XSave->FloatRegisters, State.mm, sizeof(State.mm));
-  }
+  } // madeira-bcd x87-exact: end
 
   XSave->ControlWord = State.FCW;
   XSave->StatusWord = (State.flags[FEXCore::X86State::X87FLAG_TOP_LOC] << 11) | (State.flags[FEXCore::X86State::X87FLAG_C0_LOC] << 8) |
@@ -664,7 +669,11 @@ void StoreWowContextFromState(FEXCore::Core::InternalThreadState* Thread, WOW64_
 
   Context->FloatSave.ControlWord = XSave->ControlWord;
   Context->FloatSave.StatusWord = XSave->StatusWord;
-  Context->FloatSave.TagWord = FEXCore::FPState::ConvertFromAbridgedFTW(XSave->StatusWord, WowReducedX87 ? SavedX87 : State.mm, XSave->TagWord);
+  if (WowReducedX87) { // madeira-bcd x87-exact: on
+    Context->FloatSave.TagWord = FEXCore::FPState::ConvertFromAbridgedFTW(XSave->StatusWord, SavedX87, XSave->TagWord);
+  } else { // madeira-bcd x87-exact: off
+    Context->FloatSave.TagWord = FEXCore::FPState::ConvertFromAbridgedFTW(XSave->StatusWord, State.mm, XSave->TagWord);
+  } // madeira-bcd x87-exact: end
   Context->FloatSave.ErrorOffset = XSave->ErrorOffset;
   Context->FloatSave.ErrorSelector = XSave->ErrorSelector | (XSave->ErrorOpcode << 16);
   Context->FloatSave.DataOffset = XSave->DataOffset;
@@ -1167,10 +1176,12 @@ void BTCpuProcessInit() {
   if (!FEXCore::Config::Exists(FEXCore::Config::CONFIG_X87REDUCEDPRECISION)) {
     FEXCore::Config::Set(FEXCore::Config::CONFIG_X87REDUCEDPRECISION, "1");
   }
+  // madeira-bcd x87-exact: added {
   {
     FEX_CONFIG_OPT(ReducedX87, X87REDUCEDPRECISION);
-    Context::WowReducedX87 = ReducedX87;
+    Context::WowReducedX87 = ReducedX87 && FEXCore::FPState::X87ExactInt64();
   }
+  // madeira-bcd x87-exact: added }
 
   /* MADEIRA: StrictInProcessSplitLocks defaults ON for 32-bit guests.
    *

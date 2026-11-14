@@ -99,13 +99,13 @@ void OpDispatchBuilder::FILDF64(OpcodeArgs) {
     Data = _Sbfe(OpSize::i64Bit, IR::OpSizeAsBits(ReadWidth), 0, Data);
   }
   auto ConvertedData = _Float_FromGPR_S(OpSize::i64Bit, ReadWidth == OpSize::i32Bit ? OpSize::i32Bit : OpSize::i64Bit, Data);
-  if (ReadWidth == OpSize::i64Bit) {
+  if (FPState::X87ExactInt64() && ReadWidth == OpSize::i64Bit) { // madeira-bcd x87-exact: on
     // A double holds only 53 bits: keep the integer, so that a FISTP m64 of the unchanged value
     // stores it exactly, as 32-bit MSVC's atomic 64-bit load (fild m64; fistp m64) needs.
     _PushStackFromInt64(ConvertedData, _VCastFromGPR(OpSize::i64Bit, OpSize::i64Bit, Data));
-  } else {
+  } else { // madeira-bcd x87-exact: off
     _PushStack(ConvertedData, Invalid(), OpSize::iInvalid);
-  }
+  } // madeira-bcd x87-exact: end
 }
 
 void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
@@ -120,8 +120,10 @@ void OpDispatchBuilder::FISTF64(OpcodeArgs, bool Truncate) {
     } else {
       data = _Vector_FToS(OpSize::i128Bit, OpSize::i64Bit, data);
     }
-    // The integer of an unchanged FILD m64, which the conversion would round.
-    data = _ReadStackInt64(data);
+    if (FPState::X87ExactInt64()) { // madeira-bcd x87-exact: on
+      // The integer of an unchanged FILD m64, which the conversion would round.
+      data = _ReadStackInt64(data);
+    } // madeira-bcd x87-exact: end
     StoreResultFPR_WithOpSize(Op, Op->Dest, data, OpSize::i64Bit, OpSize::i8Bit);
   } else {
     if (Truncate) {

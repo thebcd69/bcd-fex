@@ -2,15 +2,26 @@
 #pragma once
 
 #include <cstdint>
-#include <FEXCore/Utils/CompilerDefs.h>
+#include <FEXCore/Utils/CompilerDefs.h> // madeira-bcd x87-exact: added
+// madeira-bcd x87-exact: added {
 
-namespace FEXCore::Core { struct CPUState; }
+namespace FEXCore::Core { struct CpuStateFrame; }
+// madeira-bcd x87-exact: added }
 
 namespace FEXCore::FPState {
-// These conversions use caller-owned SoftFloat state and are safe in signal handlers.
-FEX_DEFAULT_VISIBILITY void ExportX87Register(const FEXCore::Core::CPUState& State, unsigned Slot, uint64_t (&Out)[2], bool Reduced);
-FEX_DEFAULT_VISIBILITY void ImportX87Register(FEXCore::Core::CPUState& State, unsigned Slot, const uint64_t (&In)[2], bool Reduced);
+// madeira-bcd x87-exact: added {
+// The switch of the exact 64-bit integer transfers in reduced-precision x87 (FILD m64 ... FISTP m64), and of everything that
+// came with them (the x87 registers of FXSAVE / FNSAVE images and of WOW64 and signal contexts in the architectural 80-bit
+// format, FXRSTOR by TOP). On only when env MADEIRA_FEX_X87_EXACT_INT64 is exactly "1"; read once. Off (the default): the
+// dispatcher, the x87 pass and the context code do what they did before these changes, statement for statement.
+FEX_DEFAULT_VISIBILITY bool X87ExactInt64();
 
+// These conversions use caller-owned SoftFloat state and are safe in signal handlers.
+// They take the frame, where the integers are kept (see CoreState.h), not the CPU state.
+FEX_DEFAULT_VISIBILITY void ExportX87Register(const FEXCore::Core::CpuStateFrame& Frame, unsigned Slot, uint64_t (&Out)[2], bool Reduced);
+FEX_DEFAULT_VISIBILITY void ImportX87Register(FEXCore::Core::CpuStateFrame& Frame, unsigned Slot, const uint64_t (&In)[2], bool Reduced);
+
+// madeira-bcd x87-exact: added }
 enum class X87Tag : uint8_t { Valid = 0b00, Zero = 0b01, Special = 0b10, Empty = 0b11 };
 
 static inline X87Tag GetX87Tag(uint64_t (&Reg)[2], bool Valid) {
